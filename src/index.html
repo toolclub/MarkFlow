@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>MarkFlow</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="dark">
+  <div id="toolbar">
+    <div class="tg drag"><span class="brand">MarkFlow</span></div><i class="sep"></i>
+    <div class="tg">
+      <button class="tb" data-c="bold" title="Ctrl+B"><b>B</b></button>
+      <button class="tb" data-c="italic" title="Ctrl+I"><i>I</i></button>
+      <button class="tb" data-c="strike"><s>S</s></button>
+      <button class="tb" data-c="inlinecode"><span style="font-family:monospace;font-size:10px">&lt;/&gt;</span></button>
+    </div><i class="sep"></i>
+    <div class="tg">
+      <button class="tb" data-c="h1">H1</button>
+      <button class="tb" data-c="h2">H2</button>
+      <button class="tb" data-c="h3">H3</button>
+    </div><i class="sep"></i>
+    <div class="tg">
+      <button class="tb" data-c="ul">⁃</button>
+      <button class="tb" data-c="ol">1.</button>
+      <button class="tb" data-c="task">☑</button>
+      <button class="tb" data-c="quote">❝</button>
+    </div><i class="sep"></i>
+    <div class="tg">
+      <button class="tb" data-c="codeblock">{ }</button>
+      <button class="tb" data-c="table">⊞</button>
+      <button class="tb" data-c="link" title="Ctrl+K">🔗</button>
+      <button class="tb" data-c="image" title="Ctrl+Shift+I">📷</button>
+      <button class="tb" data-c="hr">―</button>
+      <button class="tb" data-c="mathblock">∑</button>
+      <button class="tb" data-c="mermaid">◇</button>
+    </div>
+    <div class="tg fill drag"></div>
+    <div class="tg">
+      <button class="tb" id="btnOL">☰</button>
+      <button class="tb" id="btnSrc">源码</button>
+      <button class="tb" id="btnTh">🌙</button>
+    </div>
+  </div>
+
+  <div id="findbar">
+    <input id="fi" placeholder="查找..."><span id="fc">0</span>
+    <button class="fb" id="fpv">▲</button><button class="fb" id="fnx">▼</button>
+    <input id="ri" placeholder="替换...">
+    <button class="fb" id="r1">替换</button><button class="fb" id="rall">全部</button>
+    <button class="fb" id="fclose">✕</button>
+  </div>
+
+  <div id="main">
+    <aside id="sidebar">
+      <div class="sbh">大纲</div>
+      <div id="outlineList"></div>
+      <div class="sbf" id="wordcount">0 字</div>
+    </aside>
+
+    <div id="editorPane">
+      <!-- WYSIWYG area: block-based editor (each block manages its own contenteditable) -->
+      <div id="wysiwyg"></div>
+    </div>
+
+    <div id="sourcePane" style="display:none">
+      <textarea id="sourceTA" spellcheck="false" placeholder="Markdown 源码..."></textarea>
+    </div>
+  </div>
+
+  <!-- Language popup -->
+  <div id="langPopup">
+    <input id="langInput" placeholder="搜索语言...">
+    <div id="langList"></div>
+  </div>
+
+  <div id="statusbar">
+    <span id="stFile">未命名</span>
+    <span id="stCur"></span>
+    <span id="stW">0 字</span>
+    <span>UTF-8</span>
+    <span id="stMode">编辑</span>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>if(typeof mermaid!=='undefined')mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose'});</script>
+  <script src="renderer.js"></script>
+</body>
+</html>

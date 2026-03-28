@@ -1,0 +1,54 @@
+{
+  "name": "markflow",
+  "version": "3.0.0",
+  "description": "MarkFlow — 免费 Typora 风格 Markdown 编辑器",
+  "main": "src/main.js",
+  "author": "MarkFlow",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux",
+    "build:mac": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.markflow.editor",
+    "productName": "MarkFlow",
+    "copyright": "Copyright © 2026 MarkFlow",
+    "files": ["src/**/*", "node_modules/**/*"],
+    "win": {
+      "target": [{"target":"nsis","arch":["x64"]}],
+      "fileAssociations": [
+        {"ext":"md","name":"Markdown","description":"Markdown Document","role":"Editor"},
+        {"ext":"markdown","name":"Markdown","description":"Markdown Document","role":"Editor"}
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MarkFlow"
+    },
+    "linux": {
+      "target":["AppImage","deb"],
+      "category":"Office",
+      "mimeTypes":["text/markdown","text/x-markdown"],
+      "fileAssociations":[{"ext":"md","mimeType":"text/markdown"}]
+    },
+    "mac": {
+      "target":["dmg"],
+      "category":"public.app-category.productivity",
+      "fileAssociations":[{"ext":"md","role":"Editor"}]
+    }
+  },
+  "dependencies": {
+    "marked": "^12.0.0",
+    "highlight.js": "^11.9.0"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  }
+}
