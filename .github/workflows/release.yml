@@ -1,0 +1,114 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-latest
+            platform: linux
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (${{ matrix.platform }})
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run build:${{ matrix.platform }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.platform }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.yml
+          if-no-files-found: warn
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f | head -20 || true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: MarkFlow ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+          body: |
+            ## MarkFlow ${{ github.ref_name }}
+
+            **免费开源的 Typora 风格 Markdown 编辑器** 首个正式版发布！
+
+            ### 核心功能
+
+            - **所见即所得** — Block-based WYSIWYG Markdown 编辑器
+            - **多标签页** — 同时打开多个文件，Ctrl+Tab 快速切换
+            - **代码高亮** — 40+ 编程语言，实时语法高亮（Highlight.js）
+            - **数学公式** — KaTeX 渲染，行内 `$...$` 和块级 `$$...$$`
+            - **Mermaid 图表** — 流程图、时序图、甘特图等
+            - **查找替换** — Typora 风格浮动面板，计数显示，循环搜索
+            - **右键菜单** — 快速格式化操作，含快捷键提示
+            - **深色/浅色主题** — 一键切换
+            - **图片管理** — 工具栏插入 / 剪贴板粘贴 / 拖放，自动保存到 images/
+            - **导出 HTML / PDF**
+            - **最近文件列表** + **文档大纲** + **实时字数统计**
+
+            ### 下载
+
+            | 平台 | 文件 | 说明 |
+            |------|------|------|
+            | Windows | `MarkFlow-Setup-1.0.0.exe` | 安装器，支持自定义安装目录 |
+            | macOS | `MarkFlow-1.0.0.dmg` | 拖入 Applications 即可 |
+            | Linux | `MarkFlow-1.0.0.AppImage` | `chmod +x` 后直接运行 |
+            | Linux | `markflow_1.0.0_amd64.deb` | `sudo dpkg -i` 安装 |
+
+            ### 快捷键速查
+
+            `Ctrl+N` 新建 · `Ctrl+W` 关闭 · `Ctrl+Tab` 切换标签
+            `Ctrl+B` 加粗 · `Ctrl+I` 斜体 · `Ctrl+K` 链接
+            `Ctrl+/` 源码模式 · `Ctrl+F` 查找 · `Ctrl+Shift+T` 主题
+
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.dmg
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb

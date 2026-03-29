@@ -1,9 +1,9 @@
 {
   "name": "markflow",
-  "version": "4.0.0",
+  "version": "1.0.0",
   "description": "MarkFlow — 免费 Typora 风格 Markdown 编辑器",
   "main": "src/main.js",
-  "author": "MarkFlow",
+  "author": { "name": "MarkFlow", "email": "markflow@toolclub.dev" },
   "license": "MIT",
   "scripts": {
     "start": "electron .",
