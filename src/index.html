@@ -111,6 +111,20 @@
   <!-- Context menu -->
   <div id="contextMenu" class="ctx-menu"></div>
 
+  <!-- Custom save/close dialog -->
+  <div id="saveDialog">
+    <div class="sdbox">
+      <div class="sd-icon">📝</div>
+      <div class="sd-title" id="sdTitle">文件有未保存的更改</div>
+      <div class="sd-msg" id="sdMsg">是否在关闭前保存更改？<br>不保存将丢失当前编辑。</div>
+      <div class="sd-btns">
+        <button class="sd-btn save" id="sdSave">💾 保存</button>
+        <button class="sd-btn discard" id="sdDiscard">🗑 不保存</button>
+        <button class="sd-btn cancel" id="sdCancel">取消</button>
+      </div>
+    </div>
+  </div>
+
   <div id="statusbar">
     <span id="stFile">未命名</span>
     <span id="stCur"></span>

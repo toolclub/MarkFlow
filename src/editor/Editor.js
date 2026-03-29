@@ -405,6 +405,14 @@ class Editor {
         break;
       }
 
+      case 'html': {
+        el = document.createElement('div');
+        el.className = 'html-block';
+        el.setAttribute('contenteditable', 'false');
+        el.innerHTML = block.content;
+        break;
+      }
+
       default:
         el = document.createElement('p');
         el.setAttribute('contenteditable', 'true');
@@ -601,7 +609,7 @@ class Editor {
         block.content = this._extractTableMd(block.el);
         break;
       }
-      // math, mermaid, image, hr — content is not editable inline
+      // html, math, mermaid, image, hr — content is not editable inline
     }
   }
 
@@ -950,24 +958,84 @@ class Editor {
     // ══ LIST: handle Enter in list items ══
     if (block.type === 'list') {
       const li = closest(sel.anchorNode, n => n.nodeName === 'LI');
-      if (li && !li.textContent.trim()) {
-        // Empty list item → end the list
+      if (!li) return;
+
+      // Get direct text content of li (excluding nested ul/ol)
+      const nestedList = li.querySelector(':scope > ul, :scope > ol');
+      let directText = '';
+      for (const node of li.childNodes) {
+        if (node !== nestedList && !(nestedList && nestedList.contains(node))) {
+          directText += node.textContent || '';
+        }
+      }
+
+      if (!directText.trim()) {
+        // Empty list item → check if nested, if so unindent; otherwise end the list
         e.preventDefault();
         this._saveSnapshot();
-        li.remove();
-        // If list is now empty, remove it
-        if (!block.el.querySelectorAll('li').length) {
-          const para = this._replaceBlock(block, 'paragraph');
-          this._focusBlock(para, 'start');
-        } else {
+        const parentList = li.parentElement;
+        const grandParentLi = parentList?.parentElement?.closest('li');
+        if (grandParentLi) {
+          // Nested empty item → move up one level
+          li.remove();
           this._syncBlockFromDOM(block);
-          const para = this._insertBlockAfter(block, 'paragraph');
-          this._focusBlock(para, 'start');
+          // Insert new item after the grandparent li in its parent
+          const gpParent = grandParentLi.parentElement;
+          const newLi = document.createElement('li');
+          newLi.setAttribute('contenteditable', 'true');
+          grandParentLi.insertAdjacentElement('afterend', newLi);
+          this._syncBlockFromDOM(block);
+          this._markDirty();
+          setCursorStart(newLi);
+        } else {
+          // Top-level empty item → end the list
+          li.remove();
+          if (!block.el.querySelectorAll('li').length) {
+            const para = this._replaceBlock(block, 'paragraph');
+            this._focusBlock(para, 'start');
+          } else {
+            this._syncBlockFromDOM(block);
+            const para = this._insertBlockAfter(block, 'paragraph');
+            this._focusBlock(para, 'start');
+          }
+          this._markDirty();
         }
-        this._markDirty();
         return;
       }
-      // Non-empty list item: let browser create new li
+
+      // Non-empty list item: create new sibling li after this one
+      e.preventDefault();
+      this._saveSnapshot();
+
+      // Split text at cursor within the li
+      const range = sel.getRangeAt(0);
+      // Build a range from start of li to cursor
+      const beforeRange = document.createRange();
+      beforeRange.setStart(li, 0);
+      try { beforeRange.setEnd(range.startContainer, range.startOffset); } catch(err) { beforeRange.setEnd(li, 0); }
+      let textBefore = beforeRange.toString();
+      // Remove nested list text from the before string (nested list appears after direct text)
+      if (nestedList) {
+        const nestedText = nestedList.textContent;
+        if (textBefore.endsWith(nestedText)) textBefore = textBefore.slice(0, -nestedText.length);
+      }
+      const textAfter = directText.substring(textBefore.length);
+
+      // Update current li's direct text
+      for (const child of [...li.childNodes]) {
+        if (child !== nestedList) child.remove();
+      }
+      li.insertBefore(document.createTextNode(textBefore), nestedList || null);
+
+      // Create new li after
+      const newLi = document.createElement('li');
+      newLi.setAttribute('contenteditable', 'true');
+      newLi.textContent = textAfter;
+      li.insertAdjacentElement('afterend', newLi);
+
+      this._syncBlockFromDOM(block);
+      this._markDirty();
+      setCursorStart(newLi);
       return;
     }
 

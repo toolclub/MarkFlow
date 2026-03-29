@@ -76,30 +76,24 @@ jobs:
           body: |
             ## MarkFlow ${{ github.ref_name }}
 
-            **免费开源的 Typora 风格 Markdown 编辑器** 首个正式版发布！
+            **免费开源的 Typora 风格 Markdown 编辑器**
 
-            ### 核心功能
+            ### v1.1.0 更新内容
 
-            - **所见即所得** — Block-based WYSIWYG Markdown 编辑器
-            - **多标签页** — 同时打开多个文件，Ctrl+Tab 快速切换
-            - **代码高亮** — 40+ 编程语言，实时语法高亮（Highlight.js）
-            - **数学公式** — KaTeX 渲染，行内 `$...$` 和块级 `$$...$$`
-            - **Mermaid 图表** — 流程图、时序图、甘特图等
-            - **查找替换** — Typora 风格浮动面板，计数显示，循环搜索
-            - **右键菜单** — 快速格式化操作，含快捷键提示
-            - **深色/浅色主题** — 一键切换
-            - **图片管理** — 工具栏插入 / 剪贴板粘贴 / 拖放，自动保存到 images/
-            - **导出 HTML / PDF**
-            - **最近文件列表** + **文档大纲** + **实时字数统计**
+            - **原始 HTML 块支持** — `<p align="center">` 等 HTML 标签正确渲染，切换源码模式不再丢失内容
+            - **嵌套列表完整支持** — 多级列表显示正确的层级符号（●/○/▪）
+            - **列表 Enter 续行** — 在列表项按 Enter 自动新建同级下一项，体验与 Typora 一致
+            - **卡通风格退出提示** — 未保存退出时显示友好动画弹窗
+            - **Windows .md 文件图标** — 重装后资源管理器中 .md 文件显示 MarkFlow 图标
 
             ### 下载
 
             | 平台 | 文件 | 说明 |
             |------|------|------|
-            | Windows | `MarkFlow-Setup-1.0.0.exe` | 安装器，支持自定义安装目录 |
-            | macOS | `MarkFlow-1.0.0.dmg` | 拖入 Applications 即可 |
-            | Linux | `MarkFlow-1.0.0.AppImage` | `chmod +x` 后直接运行 |
-            | Linux | `markflow_1.0.0_amd64.deb` | `sudo dpkg -i` 安装 |
+            | Windows | `MarkFlow-Setup-1.1.0.exe` | 安装器，支持自定义安装目录 |
+            | macOS | `MarkFlow-1.1.0.dmg` | 拖入 Applications 即可 |
+            | Linux | `MarkFlow-1.1.0.AppImage` | `chmod +x` 后直接运行 |
+            | Linux | `markflow_1.1.0_amd64.deb` | `sudo dpkg -i` 安装 |
 
             ### 快捷键速查
 

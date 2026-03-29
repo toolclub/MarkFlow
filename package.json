@@ -1,6 +1,6 @@
 {
   "name": "markflow",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MarkFlow — 免费 Typora 风格 Markdown 编辑器",
   "main": "src/main.js",
   "author": { "name": "MarkFlow", "email": "markflow@toolclub.dev" },
@@ -21,8 +21,8 @@
       "icon": "build/icon.ico",
       "target": [{"target":"nsis","arch":["x64"]}],
       "fileAssociations": [
-        {"ext":"md","name":"Markdown","description":"Markdown Document","role":"Editor"},
-        {"ext":"markdown","name":"Markdown","description":"Markdown Document","role":"Editor"}
+        {"ext":"md","name":"Markdown","description":"Markdown Document","role":"Editor","icon":"build/icon.ico"},
+        {"ext":"markdown","name":"Markdown","description":"Markdown Document","role":"Editor","icon":"build/icon.ico"}
       ]
     },
     "nsis": {

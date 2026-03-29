@@ -119,6 +119,32 @@ function parseMarkdown(mdStr) {
       continue;
     }
 
+    // ──── Raw HTML block ────
+    // Detect block-level HTML tags like <p align="center">, <div>, etc.
+    const htmlTagM = line.match(/^<([a-zA-Z][a-zA-Z0-9]*)/);
+    if (htmlTagM) {
+      const tag = htmlTagM[1].toLowerCase();
+      const blockTags = ['p','div','table','thead','tbody','tr','th','td','pre','script','style',
+        'details','summary','section','article','header','footer','nav','aside','main',
+        'figure','figcaption','blockquote','h1','h2','h3','h4','h5','h6','ul','ol','dl','dt','dd'];
+      if (blockTags.includes(tag)) {
+        const htmlLines = [line];
+        const closingRe = new RegExp('</' + tag + '\\s*>', 'i');
+        if (!closingRe.test(line)) {
+          i++;
+          while (i < lines.length) {
+            htmlLines.push(lines[i]);
+            if (closingRe.test(lines[i])) { i++; break; }
+            i++;
+          }
+        } else {
+          i++;
+        }
+        blocks.push(createBlock('html', htmlLines.join('\n')));
+        continue;
+      }
+    }
+
     // ──── Blockquote ────
     if (/^>\s?/.test(line)) {
       const bqLines = [];
@@ -215,6 +241,7 @@ function blocksToMarkdown(blocks) {
       case 'mermaid': return '```mermaid\n' + b.content + '\n```';
       case 'math': return '$$\n' + b.content + '\n$$';
       case 'list': return b.content;
+      case 'html': return b.content;
       case 'blockquote': return b.content.split('\n').map(l => '> ' + l).join('\n');
       case 'table': return b.content;
       case 'hr': return '---';

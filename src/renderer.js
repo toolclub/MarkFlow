@@ -169,7 +169,7 @@ async function closeTab(tabId) {
 
   // Prompt save if dirty
   if (tab.dirty) {
-    const response = await ipcRenderer.invoke('dialog:unsaved', { filename: tab.title });
+    const response = await showSaveDialog(tab.title);
     if (response === 2) return; // Cancel
     if (response === 0) { // Save
       const saved = await saveTab(tab.id);
@@ -542,6 +542,25 @@ sourceTA.addEventListener('keydown', e => {
     if (bqE) { e.preventDefault(); sourceTA.setRangeText('', ls, pos, 'end'); return; }
   }
 });
+
+/* ========== CUSTOM SAVE DIALOG ========== */
+function showSaveDialog(filename) {
+  return new Promise(resolve => {
+    $('sdTitle').textContent = `"${filename}" 有未保存的更改`;
+    $('saveDialog').classList.add('show');
+
+    const cleanup = result => {
+      $('saveDialog').classList.remove('show');
+      $('sdSave').onclick = null;
+      $('sdDiscard').onclick = null;
+      $('sdCancel').onclick = null;
+      resolve(result);
+    };
+    $('sdSave').onclick = () => cleanup(0);
+    $('sdDiscard').onclick = () => cleanup(1);
+    $('sdCancel').onclick = () => cleanup(2);
+  });
+}
 
 /* ========== DIRTY HANDLER ========== */
 function onEditorDirty() {
@@ -1114,7 +1133,7 @@ ipcRenderer.on('app:before-close', async () => {
   for (const tab of [...tabs]) {
     if (tab.dirty) {
       if (tab.id !== activeTabId) switchToTab(tab.id);
-      const response = await ipcRenderer.invoke('dialog:unsaved', { filename: tab.title });
+      const response = await showSaveDialog(tab.title);
       if (response === 2) return; // Cancel → abort close
       if (response === 0) { // Save
         const saved = await saveTab(tab.id);
