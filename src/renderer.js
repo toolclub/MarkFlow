@@ -1,8 +1,8 @@
-/* MarkFlow v5 — Block-based WYSIWYG Markdown Editor
+/* MarkFlow v6 — Block-based WYSIWYG Markdown Editor with Tabs
  *
  * Entry point for the renderer process.
- * Creates the Editor instance and bridges it with Electron IPC,
- * toolbar, sidebar, source mode, find/replace, and keyboard shortcuts.
+ * Manages file tabs, editor instance, toolbar, sidebar, source mode,
+ * find/replace, context menu, and keyboard shortcuts.
  */
 
 'use strict';
@@ -21,6 +21,8 @@ const sidebar = $('sidebar');
 const outlineList = $('outlineList');
 const findbar = $('findbar');
 const wys = $('wysiwyg');
+const tablist = $('tablist');
+const contextMenu = $('contextMenu');
 
 /* ========== STATE ========== */
 let srcMode = false;
@@ -28,10 +30,310 @@ let currentFilePath = '';
 
 /* ========== CREATE EDITOR ========== */
 const editor = new Editor(wys, {
-  onDirty: () => ipcRenderer.send('dirty'),
+  onDirty: () => onEditorDirty(),
   onOutlineChange: (headings) => updateOutline(headings),
   onWordCountChange: (counts) => updateWordCount(counts),
 });
+
+/* ══════════════════════════════════════════════════════════════
+ *  TAB SYSTEM
+ * ══════════════════════════════════════════════════════════════ */
+
+let tabs = [];       // Array of tab objects
+let activeTabId = null;
+let tabIdCounter = 0;
+
+/**
+ * Tab object structure:
+ * {
+ *   id: number,
+ *   filePath: string,      // '' for untitled
+ *   title: string,         // display name
+ *   content: string,       // markdown content
+ *   dirty: boolean,
+ *   scrollTop: number,     // preserve scroll position
+ *   srcMode: boolean,      // was in source mode?
+ * }
+ */
+
+function createTab(filePath, content, activate) {
+  // Check if file is already open
+  if (filePath) {
+    const existing = tabs.find(t => t.filePath === filePath);
+    if (existing) {
+      switchToTab(existing.id);
+      return existing;
+    }
+  }
+
+  const tab = {
+    id: ++tabIdCounter,
+    filePath: filePath || '',
+    title: filePath ? pathMod.basename(filePath) : '未命名',
+    content: content || '',
+    dirty: false,
+    scrollTop: 0,
+    srcMode: false,
+  };
+  tabs.push(tab);
+  renderTabs();
+  if (activate !== false) switchToTab(tab.id);
+
+  // Track recent file
+  if (filePath) ipcRenderer.send('recent:add', filePath);
+
+  return tab;
+}
+
+function getActiveTab() {
+  return tabs.find(t => t.id === activeTabId) || null;
+}
+
+function switchToTab(tabId) {
+  if (activeTabId === tabId) return;
+
+  // Save current tab state
+  saveCurrentTabState();
+
+  activeTabId = tabId;
+  const tab = getActiveTab();
+  if (!tab) return;
+
+  // Restore source mode state
+  if (tab.srcMode && !srcMode) {
+    _enterSourceSilent();
+  } else if (!tab.srcMode && srcMode) {
+    _leaveSourceSilent();
+  }
+
+  // Load content
+  currentFilePath = tab.filePath;
+  editor.currentFilePath = tab.filePath;
+
+  if (srcMode) {
+    sourceTA.value = tab.content;
+  } else {
+    editor.loadMarkdown(tab.content);
+  }
+
+  // Restore scroll
+  requestAnimationFrame(() => {
+    editorPane.scrollTop = tab.scrollTop;
+  });
+
+  // Update UI
+  renderTabs();
+  updateStatusBar();
+  updateWindowTitle();
+}
+
+function saveCurrentTabState() {
+  const tab = getActiveTab();
+  if (!tab) return;
+
+  tab.srcMode = srcMode;
+  tab.scrollTop = editorPane.scrollTop;
+
+  if (srcMode) {
+    tab.content = sourceTA.value;
+  } else {
+    tab.content = editor.getMarkdown();
+  }
+}
+
+function markTabDirty(tabId) {
+  const tab = tabs.find(t => t.id === (tabId || activeTabId));
+  if (!tab || tab.dirty) return;
+  tab.dirty = true;
+  renderTabs();
+  updateWindowTitle();
+  // Tell main process there are dirty tabs
+  ipcRenderer.send('window:dirty', tabs.some(t => t.dirty));
+}
+
+function markTabClean(tabId) {
+  const tab = tabs.find(t => t.id === (tabId || activeTabId));
+  if (!tab) return;
+  tab.dirty = false;
+  renderTabs();
+  updateWindowTitle();
+  ipcRenderer.send('window:dirty', tabs.some(t => t.dirty));
+}
+
+async function closeTab(tabId) {
+  const tab = tabs.find(t => t.id === tabId);
+  if (!tab) return;
+
+  // Save state if this is the active tab
+  if (tab.id === activeTabId) saveCurrentTabState();
+
+  // Prompt save if dirty
+  if (tab.dirty) {
+    const response = await ipcRenderer.invoke('dialog:unsaved', { filename: tab.title });
+    if (response === 2) return; // Cancel
+    if (response === 0) { // Save
+      const saved = await saveTab(tab.id);
+      if (!saved) return; // Save failed or canceled
+    }
+  }
+
+  // Remove tab
+  const idx = tabs.indexOf(tab);
+  tabs.splice(idx, 1);
+
+  if (tabs.length === 0) {
+    // Create a new empty tab
+    createTab('', '', true);
+    return;
+  }
+
+  // Switch to adjacent tab
+  if (tab.id === activeTabId) {
+    activeTabId = null; // Reset so switchToTab works
+    const newIdx = Math.min(idx, tabs.length - 1);
+    switchToTab(tabs[newIdx].id);
+  } else {
+    renderTabs();
+  }
+}
+
+async function saveTab(tabId) {
+  const tab = tabs.find(t => t.id === (tabId || activeTabId));
+  if (!tab) return false;
+
+  // Get current content
+  if (tab.id === activeTabId) saveCurrentTabState();
+
+  if (tab.filePath) {
+    const result = await ipcRenderer.invoke('file:save', { filePath: tab.filePath, content: tab.content });
+    if (result.success) {
+      markTabClean(tab.id);
+      return true;
+    }
+    return false;
+  } else {
+    return saveTabAs(tab.id);
+  }
+}
+
+async function saveTabAs(tabId) {
+  const tab = tabs.find(t => t.id === (tabId || activeTabId));
+  if (!tab) return false;
+
+  if (tab.id === activeTabId) saveCurrentTabState();
+
+  const result = await ipcRenderer.invoke('file:save-as', {
+    content: tab.content,
+    defaultPath: tab.filePath || 'untitled.md'
+  });
+
+  if (result.success) {
+    tab.filePath = result.path;
+    tab.title = pathMod.basename(result.path);
+    currentFilePath = result.path;
+    editor.currentFilePath = result.path;
+    markTabClean(tab.id);
+    ipcRenderer.send('recent:add', result.path);
+    renderTabs();
+    updateStatusBar();
+    return true;
+  }
+  return false;
+}
+
+/* ── Tab UI Rendering ── */
+
+function renderTabs() {
+  tablist.innerHTML = '';
+  for (const tab of tabs) {
+    const el = document.createElement('div');
+    el.className = 'tab' + (tab.id === activeTabId ? ' active' : '');
+    el.dataset.tabId = tab.id;
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'tab-title';
+    titleSpan.textContent = tab.title;
+    titleSpan.title = tab.filePath || tab.title;
+    el.appendChild(titleSpan);
+
+    if (tab.dirty) {
+      const dot = document.createElement('span');
+      dot.className = 'tab-dirty';
+      dot.textContent = '\u25CF'; // ●
+      el.appendChild(dot);
+    }
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'tab-close';
+    closeBtn.textContent = '\u2715'; // ✕
+    closeBtn.title = '关闭';
+    closeBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      closeTab(tab.id);
+    });
+    el.appendChild(closeBtn);
+
+    // Click to switch
+    el.addEventListener('click', () => switchToTab(tab.id));
+
+    // Middle-click to close
+    el.addEventListener('auxclick', e => {
+      if (e.button === 1) { e.preventDefault(); closeTab(tab.id); }
+    });
+
+    // Context menu on tab
+    el.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      showTabContextMenu(e, tab);
+    });
+
+    tablist.appendChild(el);
+  }
+
+  // Scroll active tab into view
+  const activeEl = tablist.querySelector('.tab.active');
+  if (activeEl) activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function showTabContextMenu(e, tab) {
+  const items = [
+    { label: '关闭', action: () => closeTab(tab.id) },
+    { label: '关闭其他', action: () => {
+      const others = tabs.filter(t => t.id !== tab.id).map(t => t.id);
+      (async () => { for (const id of others) await closeTab(id); })();
+    }},
+    { label: '关闭右侧', action: () => {
+      const idx = tabs.indexOf(tab);
+      const right = tabs.slice(idx + 1).map(t => t.id);
+      (async () => { for (const id of right) await closeTab(id); })();
+    }},
+    { sep: true },
+    { label: tab.filePath ? '复制路径' : '(未保存)', action: () => {
+      if (tab.filePath) navigator.clipboard.writeText(tab.filePath);
+    }, disabled: !tab.filePath },
+  ];
+  showContextMenu(e.clientX, e.clientY, items);
+}
+
+/* ── Window Title ── */
+
+function updateWindowTitle() {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const name = tab.title || '未命名';
+  const dirty = tab.dirty ? ' \u25CF' : '';
+  const title = `${name}${dirty} \u2014 MarkFlow`;
+  ipcRenderer.send('window:title', title);
+}
+
+function updateStatusBar() {
+  const tab = getActiveTab();
+  $('stFile').textContent = tab ? (tab.title || '未命名') : '未命名';
+  $('stMode').textContent = srcMode ? '源码' : '编辑';
+}
+
+/* ========== New Tab button ========== */
+$('tabNew').addEventListener('click', () => createTab('', '', true));
 
 /* ========== OUTLINE ========== */
 function updateOutline(headings) {
@@ -50,29 +352,67 @@ function updateOutline(headings) {
 
 /* ========== WORD COUNT ========== */
 function updateWordCount(counts) {
-  $('wordcount').textContent = `${counts.chars} 字符 · ${counts.words} 词`;
+  $('wordcount').textContent = `${counts.chars} 字符 \u00B7 ${counts.words} 词`;
   $('stW').textContent = counts.chars + ' 字';
 }
 
+/* ========== RECENT FILES ========== */
+async function loadRecentFiles() {
+  const files = await ipcRenderer.invoke('recent:get');
+  const list = $('recentList');
+  list.innerHTML = '';
+  for (const fp of (files || []).slice(0, 10)) {
+    const btn = document.createElement('button');
+    btn.className = 'recent-item';
+    btn.title = fp;
+
+    const name = document.createElement('span');
+    name.className = 'recent-name';
+    name.textContent = pathMod.basename(fp);
+    btn.appendChild(name);
+
+    const pathSpan = document.createElement('span');
+    pathSpan.className = 'recent-path';
+    pathSpan.textContent = pathMod.dirname(fp);
+    btn.appendChild(pathSpan);
+
+    btn.addEventListener('click', async () => {
+      const result = await ipcRenderer.invoke('recent:open', fp);
+      if (result.success) {
+        createTab(result.path, result.content, true);
+      }
+    });
+    list.appendChild(btn);
+  }
+}
+
 /* ========== SOURCE MODE ========== */
-function enterSource() {
-  const md = editor.getMarkdown();
-  sourceTA.value = md;
+function _enterSourceSilent() {
   editorPane.style.display = 'none';
   sourcePane.style.display = 'flex';
   srcMode = true;
   $('stMode').textContent = '源码';
   $('btnSrc').classList.add('on');
-  sourceTA.focus();
 }
 
-function leaveSource() {
-  const md = sourceTA.value;
+function _leaveSourceSilent() {
   editorPane.style.display = 'block';
   sourcePane.style.display = 'none';
   srcMode = false;
   $('stMode').textContent = '编辑';
   $('btnSrc').classList.remove('on');
+}
+
+function enterSource() {
+  const md = editor.getMarkdown();
+  sourceTA.value = md;
+  _enterSourceSilent();
+  sourceTA.focus();
+}
+
+function leaveSource() {
+  const md = sourceTA.value;
+  _leaveSourceSilent();
   editor.loadMarkdown(md);
   wys.focus();
 }
@@ -80,7 +420,7 @@ function leaveSource() {
 function toggleSource() { srcMode ? leaveSource() : enterSource(); }
 
 sourceTA.addEventListener('input', () => {
-  ipcRenderer.send('dirty');
+  onEditorDirty();
   $('stW').textContent = sourceTA.value.length + ' 字';
 });
 
@@ -91,7 +431,6 @@ sourceTA.addEventListener('paste', e => {
     for (const item of items) {
       if (item.type.startsWith('image/')) {
         e.preventDefault();
-        // Handle in source mode: insert markdown reference
         const blob = item.getAsFile();
         const reader = new FileReader();
         reader.onload = async () => {
@@ -100,7 +439,8 @@ sourceTA.addEventListener('paste', e => {
             try {
               const ext = item.type.split('/')[1] === 'jpeg' ? 'jpg' : (item.type.split('/')[1] || 'png');
               const filename = `image-${Date.now()}.${ext}`;
-              const savedPath = await ipcRenderer.invoke('save:image', { data: base64, filename });
+              const baseDir = pathMod.dirname(currentFilePath);
+              const savedPath = await ipcRenderer.invoke('save:image', { data: base64, filename, baseDir });
               if (savedPath) {
                 const pos = sourceTA.selectionStart;
                 sourceTA.setRangeText(`\n![](${savedPath})\n`, pos, sourceTA.selectionEnd, 'end');
@@ -142,7 +482,7 @@ sourceTA.addEventListener('keydown', e => {
     const ls = val.lastIndexOf('\n', pos - 1) + 1;
     const line = val.substring(ls, pos);
 
-    // ``` + Enter → code block
+    // ``` + Enter -> code block
     const cm = line.match(/^(\s*)```(\w*)\s*$/);
     if (cm) {
       e.preventDefault();
@@ -150,9 +490,8 @@ sourceTA.addEventListener('keydown', e => {
       const lang = cm[2];
       sourceTA.setRangeText('\n' + indent + '\n' + indent + '```', pos, pos, 'end');
       sourceTA.selectionStart = sourceTA.selectionEnd = pos + 1 + indent.length;
-      ipcRenderer.send('dirty');
+      onEditorDirty();
       if (!lang) {
-        // Open language popup for source mode
         const editor_lp = editor.langPopup;
         setTimeout(() => {
           const rect = sourceTA.getBoundingClientRect();
@@ -169,7 +508,7 @@ sourceTA.addEventListener('keydown', e => {
                 lines[idx] = indent + '```' + newLang;
                 sourceTA.value = lines.join('\n');
                 editor.lastLang = newLang;
-                ipcRenderer.send('dirty');
+                onEditorDirty();
               }
               sourceTA.focus();
             }
@@ -204,6 +543,11 @@ sourceTA.addEventListener('keydown', e => {
   }
 });
 
+/* ========== DIRTY HANDLER ========== */
+function onEditorDirty() {
+  markTabDirty();
+}
+
 /* ========== FORMAT COMMANDS (dispatcher) ========== */
 function fmt(cmd) {
   if (srcMode) { fmtSource(cmd); return; }
@@ -229,6 +573,7 @@ function fmtSource(cmd) {
     case 'ol': pre('1. '); break;
     case 'task': pre('- [ ] '); break;
     case 'quote': pre('> '); break;
+    case 'code':
     case 'codeblock': ins('\n```\n\n```\n'); sourceTA.selectionStart = sourceTA.selectionEnd = s + 5; break;
     case 'table': ins('\n| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n|  |  |  |\n'); break;
     case 'link': wrap('[', '](https://)'); break;
@@ -237,48 +582,339 @@ function fmtSource(cmd) {
     case 'mathblock': ins('\n$$\n\n$$\n'); sourceTA.selectionStart = sourceTA.selectionEnd = s + 4; break;
     case 'mermaid': ins('\n```mermaid\ngraph TD\n    A[开始] --> B{判断}\n    B -->|是| C[结果1]\n    B -->|否| D[结果2]\n```\n'); break;
   }
-  ipcRenderer.send('dirty');
+  onEditorDirty();
 }
 
-/* ========== FIND & REPLACE ========== */
+/* ========== FIND & REPLACE (Typora-style) ========== */
+let findMatches = [];
+let findIndex = -1;
+let replaceVisible = false;
+
 function toggleFind() {
-  findbar.classList.toggle('show');
-  if (findbar.classList.contains('show')) $('fi').focus();
+  const isOpen = findbar.classList.contains('show');
+  if (isOpen) {
+    findbar.classList.remove('show');
+    clearFindHighlights();
+  } else {
+    findbar.classList.add('show');
+    // Copy selection to search input
+    const sel = srcMode
+      ? sourceTA.value.substring(sourceTA.selectionStart, sourceTA.selectionEnd)
+      : window.getSelection().toString();
+    if (sel && sel.length < 200) $('fi').value = sel;
+    $('fi').focus();
+    $('fi').select();
+    if ($('fi').value) performFind(false);
+  }
 }
 
-$('fi').addEventListener('input', () => {
+function toggleReplace() {
+  replaceVisible = !replaceVisible;
+  $('replaceRow').style.display = replaceVisible ? 'flex' : 'none';
+  $('ftoggle').classList.toggle('on', replaceVisible);
+}
+
+function clearFindHighlights() {
+  findMatches = [];
+  findIndex = -1;
+  $('fc').textContent = '';
+}
+
+/**
+ * performFind: scan for matches and update count.
+ * @param {boolean} navigate - if true, scroll to first match (used on Enter/next/prev).
+ *                             false = just count (used on every input keystroke).
+ */
+function performFind(navigate) {
   const q = $('fi').value;
-  if (!q) { $('fc').textContent = '0'; return; }
+  if (!q) { $('fc').textContent = ''; clearFindHighlights(); return; }
+
   if (srcMode) {
-    let c = 0, i = 0;
-    while ((i = sourceTA.value.indexOf(q, i)) !== -1) { c++; i += q.length; }
-    $('fc').textContent = c || '无';
+    // Count matches in source textarea
+    let c = 0, idx = 0;
+    const val = sourceTA.value;
+    const ql = q.toLowerCase();
+    const vl = val.toLowerCase();
+    while ((idx = vl.indexOf(ql, idx)) !== -1) { c++; idx += q.length; }
+    findMatches.length = c;
+    $('fc').textContent = c ? `${c} 个` : '无结果';
+
+    if (navigate && c > 0) {
+      // Find next occurrence from current position
+      const pos = sourceTA.selectionEnd || 0;
+      let i = vl.indexOf(ql, pos);
+      if (i === -1) i = vl.indexOf(ql); // wrap
+      if (i !== -1) {
+        sourceTA.focus();
+        sourceTA.setSelectionRange(i, i + q.length);
+      }
+    }
   } else {
-    window.getSelection().removeAllRanges();
-    $('fc').textContent = window.find(q, false, false, true) ? '✓' : '无';
+    // WYSIWYG mode: scan text nodes
+    findMatches = [];
+    const walker = document.createTreeWalker(wys, NodeFilter.SHOW_TEXT);
+    const searchLower = q.toLowerCase();
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const text = node.textContent;
+      let idx = 0;
+      while ((idx = text.toLowerCase().indexOf(searchLower, idx)) !== -1) {
+        findMatches.push({ node, offset: idx, length: q.length });
+        idx += q.length;
+      }
+    }
+    $('fc').textContent = findMatches.length ? `${findMatches.length} 个` : '无结果';
+
+    if (navigate && findMatches.length > 0) {
+      if (findIndex < 0) findIndex = 0;
+      navigateToMatch(findIndex);
+    }
   }
+}
+
+/**
+ * Navigate to a specific match in WYSIWYG mode.
+ * Does NOT steal focus from the find input.
+ */
+function navigateToMatch(idx) {
+  if (idx < 0 || idx >= findMatches.length) return;
+  const match = findMatches[idx];
+  if (!match || !match.node.parentNode) return;
+
+  try {
+    const range = document.createRange();
+    range.setStart(match.node, match.offset);
+    range.setEnd(match.node, match.offset + match.length);
+
+    // Scroll into view without stealing focus
+    const el = match.node.parentElement;
+    if (el) {
+      const rect = range.getBoundingClientRect();
+      const paneRect = editorPane.getBoundingClientRect();
+      if (rect.top < paneRect.top || rect.bottom > paneRect.bottom) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+
+    // Set selection in editor (but keep focus on find input)
+    const wasFocused = document.activeElement;
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    // Restore focus to find input if it was focused
+    if (wasFocused && findbar.contains(wasFocused)) {
+      wasFocused.focus();
+    }
+  } catch (e) { /* ignore invalid range */ }
+
+  $('fc').textContent = `${idx + 1}/${findMatches.length}`;
+}
+
+function findNext() {
+  if (srcMode) {
+    const q = $('fi').value;
+    if (!q) return;
+    const ql = q.toLowerCase();
+    const vl = sourceTA.value.toLowerCase();
+    const pos = sourceTA.selectionEnd || 0;
+    let i = vl.indexOf(ql, pos);
+    if (i === -1) i = vl.indexOf(ql); // wrap
+    if (i !== -1) {
+      sourceTA.focus();
+      sourceTA.setSelectionRange(i, i + q.length);
+      // Refocus find input
+      $('fi').focus();
+    }
+  } else {
+    if (findMatches.length === 0) { performFind(true); return; }
+    findIndex = (findIndex + 1) % findMatches.length;
+    navigateToMatch(findIndex);
+  }
+}
+
+function findPrev() {
+  if (srcMode) {
+    const q = $('fi').value;
+    if (!q) return;
+    const ql = q.toLowerCase();
+    const vl = sourceTA.value.toLowerCase();
+    const pos = Math.max(0, (sourceTA.selectionStart || 0) - 1);
+    let i = vl.lastIndexOf(ql, pos);
+    if (i === -1) i = vl.lastIndexOf(ql); // wrap
+    if (i !== -1) {
+      sourceTA.focus();
+      sourceTA.setSelectionRange(i, i + q.length);
+      $('fi').focus();
+    }
+  } else {
+    if (findMatches.length === 0) { performFind(true); return; }
+    findIndex = (findIndex - 1 + findMatches.length) % findMatches.length;
+    navigateToMatch(findIndex);
+  }
+}
+
+function replaceOne() {
+  const q = $('fi').value, r = $('ri').value;
+  if (!q) return;
+  if (srcMode) {
+    const ql = q.toLowerCase();
+    const vl = sourceTA.value.toLowerCase();
+    const i = vl.indexOf(ql, sourceTA.selectionStart);
+    if (i !== -1) {
+      sourceTA.setRangeText(r, i, i + q.length, 'end');
+      onEditorDirty();
+      performFind(false);
+    }
+  } else {
+    // Replace current selection if it matches
+    const sel = window.getSelection();
+    if (sel.toString().toLowerCase() === q.toLowerCase()) {
+      // Focus the editor briefly to allow execCommand
+      const editable = sel.anchorNode?.parentElement?.closest('[contenteditable]');
+      if (editable) editable.focus();
+      document.execCommand('insertText', false, r);
+      onEditorDirty();
+    }
+    // Re-scan and go to next
+    performFind(false);
+    if (findMatches.length > 0) {
+      if (findIndex >= findMatches.length) findIndex = 0;
+      navigateToMatch(findIndex);
+    }
+    $('fi').focus();
+  }
+}
+
+function replaceAll() {
+  const q = $('fi').value, r = $('ri').value;
+  if (!q) return;
+  if (srcMode) {
+    sourceTA.value = sourceTA.value.split(q).join(r);
+    onEditorDirty();
+  } else {
+    saveCurrentTabState();
+    const tab = getActiveTab();
+    if (tab) {
+      tab.content = tab.content.split(q).join(r);
+      editor.loadMarkdown(tab.content);
+      onEditorDirty();
+    }
+  }
+  performFind(false);
+  $('fi').focus();
+}
+
+// Input handler — just count, don't navigate
+$('fi').addEventListener('input', () => performFind(false));
+
+// Keyboard in find input
+$('fi').addEventListener('keydown', e => {
+  e.stopPropagation(); // prevent global shortcuts from firing
+  if (e.key === 'Enter') { e.preventDefault(); e.shiftKey ? findPrev() : findNext(); }
+  if (e.key === 'Escape') { e.preventDefault(); toggleFind(); }
 });
 
-$('fnx').addEventListener('click', () => { if (!srcMode) window.find($('fi').value); });
-$('fpv').addEventListener('click', () => { if (!srcMode) window.find($('fi').value, false, true); });
-$('r1').addEventListener('click', () => {
-  if (srcMode) {
-    const q = $('fi').value, r = $('ri').value;
-    const i = sourceTA.value.indexOf(q);
-    if (i !== -1) { sourceTA.setRangeText(r, i, i + q.length, 'end'); }
-  }
+// Keyboard in replace input
+$('ri').addEventListener('keydown', e => {
+  e.stopPropagation(); // prevent global shortcuts from firing
+  if (e.key === 'Enter') { e.preventDefault(); replaceOne(); }
+  if (e.key === 'Escape') { e.preventDefault(); toggleFind(); }
 });
-$('rall').addEventListener('click', () => {
-  if (srcMode) { sourceTA.value = sourceTA.value.split($('fi').value).join($('ri').value); }
-});
+
+$('fnx').addEventListener('click', findNext);
+$('fpv').addEventListener('click', findPrev);
+$('r1').addEventListener('click', replaceOne);
+$('rall').addEventListener('click', replaceAll);
 $('fclose').addEventListener('click', toggleFind);
+$('ftoggle').addEventListener('click', toggleReplace);
+
+/* ========== CONTEXT MENU ========== */
+function showContextMenu(x, y, items) {
+  contextMenu.innerHTML = '';
+  for (const item of items) {
+    if (item.sep) {
+      const sep = document.createElement('div');
+      sep.className = 'ctx-sep';
+      contextMenu.appendChild(sep);
+      continue;
+    }
+    const el = document.createElement('div');
+    el.className = 'ctx-item';
+    if (item.disabled) el.style.opacity = '0.4';
+
+    const label = document.createElement('span');
+    label.textContent = item.label;
+    el.appendChild(label);
+
+    if (item.key) {
+      const key = document.createElement('span');
+      key.className = 'ctx-key';
+      key.textContent = item.key;
+      el.appendChild(key);
+    }
+
+    if (!item.disabled) {
+      el.addEventListener('click', () => {
+        hideContextMenu();
+        if (item.action) item.action();
+      });
+    }
+    contextMenu.appendChild(el);
+  }
+
+  // Position
+  contextMenu.style.left = x + 'px';
+  contextMenu.style.top = y + 'px';
+  contextMenu.classList.add('show');
+
+  // Adjust if off-screen
+  requestAnimationFrame(() => {
+    const rect = contextMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) contextMenu.style.left = (x - rect.width) + 'px';
+    if (rect.bottom > window.innerHeight) contextMenu.style.top = (y - rect.height) + 'px';
+  });
+}
+
+function hideContextMenu() {
+  contextMenu.classList.remove('show');
+}
+
+document.addEventListener('click', () => hideContextMenu());
+document.addEventListener('contextmenu', e => {
+  // Only show custom context menu in editor area
+  if (!editorPane.contains(e.target) && !sourcePane.contains(e.target)) return;
+  e.preventDefault();
+
+  const inSource = srcMode;
+  const sel = inSource ? sourceTA.value.substring(sourceTA.selectionStart, sourceTA.selectionEnd) : window.getSelection().toString();
+  const hasSelection = sel.length > 0;
+
+  const items = [
+    { label: '剪切', key: 'Ctrl+X', action: () => document.execCommand('cut'), disabled: !hasSelection },
+    { label: '复制', key: 'Ctrl+C', action: () => document.execCommand('copy'), disabled: !hasSelection },
+    { label: '粘贴', key: 'Ctrl+V', action: () => document.execCommand('paste') },
+    { label: '全选', key: 'Ctrl+A', action: () => document.execCommand('selectAll') },
+    { sep: true },
+    { label: '加粗', key: 'Ctrl+B', action: () => fmt('bold') },
+    { label: '斜体', key: 'Ctrl+I', action: () => fmt('italic') },
+    { label: '删除线', action: () => fmt('strike') },
+    { label: '行内代码', key: 'Ctrl+`', action: () => fmt('inlinecode') },
+    { sep: true },
+    { label: '插入链接', key: 'Ctrl+K', action: () => fmt('link') },
+    { label: '插入图片', key: 'Ctrl+Shift+I', action: () => fmt('image') },
+    { label: '插入代码块', key: 'Ctrl+Shift+K', action: () => fmt('codeblock') },
+    { label: '插入表格', action: () => fmt('table') },
+  ];
+
+  showContextMenu(e.clientX, e.clientY, items);
+});
 
 /* ========== THEME ========== */
 function toggleTheme() {
   const isDark = document.body.classList.contains('dark');
   document.body.classList.toggle('dark', !isDark);
   document.body.classList.toggle('light', isDark);
-  $('btnTh').textContent = isDark ? '☀' : '🌙';
+  $('btnTh').textContent = isDark ? '\u2600' : '\uD83C\uDF19';
   editor.onThemeChange();
 }
 
@@ -293,7 +929,20 @@ $('btnTh').addEventListener('click', toggleTheme);
 /* ========== KEYBOARD SHORTCUTS ========== */
 document.addEventListener('keydown', e => {
   if (editor.langPopup.isOpen()) return;
+
+  // Don't intercept typing in find/replace inputs (they have stopPropagation,
+  // but handle the case where Ctrl shortcuts should still work globally)
+  const inFindbar = findbar.contains(document.activeElement);
+  if (inFindbar && !e.ctrlKey && !e.metaKey) return;
+
   const c = e.ctrlKey || e.metaKey;
+
+  // When in findbar, only allow specific global shortcuts
+  if (inFindbar && c) {
+    // Allow Ctrl+F (toggle), Ctrl+H (toggle), Ctrl+W, Ctrl+Tab, Ctrl+S, Ctrl+N, Ctrl+O, Escape
+    const allowed = ['f', 'h', 'w', 'Tab', 's', 'n', 'o'];
+    if (!allowed.includes(e.key) && e.key !== 'Escape') return;
+  }
 
   // Undo / Redo (intercept before browser)
   if (c && e.key === 'z' && !e.shiftKey) {
@@ -309,6 +958,32 @@ document.addEventListener('keydown', e => {
       editor.redo();
       return;
     }
+  }
+
+  // Tab management
+  if (c && e.key === 'n') { e.preventDefault(); createTab('', '', true); return; }
+  if (c && e.key === 'w') { e.preventDefault(); closeTab(activeTabId); return; }
+  if (c && e.key === 'Tab') {
+    e.preventDefault();
+    if (tabs.length > 1) {
+      const idx = tabs.findIndex(t => t.id === activeTabId);
+      const next = e.shiftKey
+        ? (idx - 1 + tabs.length) % tabs.length
+        : (idx + 1) % tabs.length;
+      switchToTab(tabs[next].id);
+    }
+    return;
+  }
+  if (c && e.key === 's') {
+    e.preventDefault();
+    if (e.shiftKey) saveTabAs();
+    else saveTab();
+    return;
+  }
+  if (c && e.key === 'o') {
+    e.preventDefault();
+    openFileDialog();
+    return;
   }
 
   if (c && e.key === 'b') { e.preventDefault(); fmt('bold'); }
@@ -330,9 +1005,19 @@ document.addEventListener('keydown', e => {
     if (editor.langPopup.isOpen()) editor.langPopup.close();
     else if (editor._blockEditor) editor._closeBlockEditor();
     else if (findbar.classList.contains('show')) toggleFind();
+    else if (contextMenu.classList.contains('show')) hideContextMenu();
   }
   if (e.key === 'F11') { e.preventDefault(); ipcRenderer.send('toggle-fullscreen'); }
 });
+
+/* ========== OPEN FILE ========== */
+async function openFileDialog() {
+  const result = await ipcRenderer.invoke('dialog:open');
+  if (result.canceled) return;
+  for (const file of result.files) {
+    createTab(file.path, file.content, true);
+  }
+}
 
 /* ========== DRAG & DROP ========== */
 let dropEl = null;
@@ -356,22 +1041,26 @@ document.addEventListener('drop', e => {
   if (dropEl) { dropEl.remove(); dropEl = null; }
 
   if (e.dataTransfer.files.length) {
-    const file = e.dataTransfer.files[0];
-    const ext = pathMod.extname(file.name).toLowerCase();
+    for (const file of e.dataTransfer.files) {
+      const ext = pathMod.extname(file.name).toLowerCase();
 
-    // Markdown / text files
-    if (['.md', '.markdown', '.txt'].includes(ext)) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (srcMode) sourceTA.value = reader.result;
-        else editor.loadMarkdown(reader.result);
-      };
-      reader.readAsText(file);
-      return;
+      // Markdown / text files → open in new tab
+      if (['.md', '.markdown', '.txt'].includes(ext)) {
+        if (file.path) {
+          // Electron gives us the full path
+          const content = require('fs').readFileSync(file.path, 'utf-8');
+          createTab(file.path, content, true);
+        } else {
+          const reader = new FileReader();
+          reader.onload = () => createTab('', reader.result, true);
+          reader.readAsText(file);
+        }
+        continue;
+      }
+
+      // Image files
+      if (editor.handleDrop(file)) continue;
     }
-
-    // Image files
-    if (editor.handleDrop(file)) return;
   }
 });
 
@@ -383,33 +1072,18 @@ document.addEventListener('click', e => {
 });
 
 /* ========== IPC HANDLERS ========== */
-ipcRenderer.on('file:open', (_, { content, path: fp }) => {
-  currentFilePath = fp;
-  editor.currentFilePath = fp;
-  $('stFile').textContent = pathMod.basename(fp);
-  if (srcMode) sourceTA.value = content;
-  else editor.loadMarkdown(content);
+
+// Open file from main process (e.g. command line, drag to dock, open-with)
+ipcRenderer.on('file:open-in-tab', (_, { content, path: fp }) => {
+  if (content !== null) createTab(fp, content, true);
 });
 
-ipcRenderer.on('file:new', () => {
-  currentFilePath = '';
-  editor.currentFilePath = '';
-  $('stFile').textContent = '未命名';
-  if (srcMode) sourceTA.value = '';
-  else editor.loadMarkdown('');
-});
-
-ipcRenderer.on('file:get', () => {
-  let md;
-  if (srcMode) md = sourceTA.value;
-  else md = editor.getMarkdown();
-  ipcRenderer.send('file:content', md);
-});
-
-ipcRenderer.on('file:path', (_, fp) => {
-  currentFilePath = fp;
-  editor.currentFilePath = fp;
-});
+// Menu commands
+ipcRenderer.on('cmd:new', () => createTab('', '', true));
+ipcRenderer.on('cmd:open', () => openFileDialog());
+ipcRenderer.on('cmd:save', () => saveTab());
+ipcRenderer.on('cmd:save-as', () => saveTabAs());
+ipcRenderer.on('cmd:close-tab', () => closeTab(activeTabId));
 
 ipcRenderer.on('cmd:fmt', (_, c) => fmt(c));
 ipcRenderer.on('cmd:source', toggleSource);
@@ -418,18 +1092,42 @@ ipcRenderer.on('cmd:theme', toggleTheme);
 ipcRenderer.on('cmd:find', toggleFind);
 
 ipcRenderer.on('cmd:exporthtml', () => {
-  let md;
-  if (srcMode) md = sourceTA.value;
-  else md = editor.getMarkdown();
+  saveCurrentTabState();
+  const tab = getActiveTab();
+  if (!tab) return;
   const marked = require('marked');
-  const html = marked.parse(md);
-  ipcRenderer.invoke('export:html', `<!DOCTYPE html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"><style>body{font-family:Georgia,serif;max-width:820px;margin:40px auto;padding:0 20px;color:#1e1f2e;line-height:1.8}h1,h2,h3{font-family:sans-serif}h1{border-bottom:2px solid #e0e2ec;padding-bottom:.3em}code{background:#f5f5fa;padding:2px 6px;border-radius:4px;font-family:monospace}pre{background:#f5f5fa;padding:16px;border-radius:8px;overflow-x:auto}pre code{background:none;padding:0}blockquote{border-left:4px solid #6366f1;background:#f5f5fa;padding:12px 20px}table{width:100%;border-collapse:collapse}th{background:#f0f1f5;padding:10px;border:1px solid #e0e2ec}td{padding:8px;border:1px solid #ecedf3}img{max-width:100%}hr{border:none;height:1px;background:#e0e2ec;margin:2em 0}a{color:#4f46e5}</style></head><body>${html}</body></html>`);
+  const html = marked.parse(tab.content);
+  ipcRenderer.invoke('export:html', {
+    html: `<!DOCTYPE html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"><style>body{font-family:Georgia,serif;max-width:820px;margin:40px auto;padding:0 20px;color:#1e1f2e;line-height:1.8}h1,h2,h3{font-family:sans-serif}h1{border-bottom:2px solid #e0e2ec;padding-bottom:.3em}code{background:#f5f5fa;padding:2px 6px;border-radius:4px;font-family:monospace}pre{background:#f5f5fa;padding:16px;border-radius:8px;overflow-x:auto}pre code{background:none;padding:0}blockquote{border-left:4px solid #6366f1;background:#f5f5fa;padding:12px 20px}table{width:100%;border-collapse:collapse}th{background:#f0f1f5;padding:10px;border:1px solid #e0e2ec}td{padding:8px;border:1px solid #ecedf3}img{max-width:100%}hr{border:none;height:1px;background:#e0e2ec;margin:2em 0}a{color:#4f46e5}</style></head><body>${html}</body></html>`,
+    defaultPath: tab.filePath || 'export'
+  });
 });
 
-ipcRenderer.on('cmd:exportpdf', () => ipcRenderer.invoke('export:pdf'));
+ipcRenderer.on('cmd:exportpdf', () => {
+  const tab = getActiveTab();
+  ipcRenderer.invoke('export:pdf', { defaultPath: tab?.filePath || 'export' });
+});
 
-/* ========== INITIAL CONTENT ========== */
-const WELCOME = `# 欢迎使用 MarkFlow ✨
+// Close guard
+ipcRenderer.on('app:before-close', async () => {
+  // Try to close all dirty tabs
+  for (const tab of [...tabs]) {
+    if (tab.dirty) {
+      if (tab.id !== activeTabId) switchToTab(tab.id);
+      const response = await ipcRenderer.invoke('dialog:unsaved', { filename: tab.title });
+      if (response === 2) return; // Cancel → abort close
+      if (response === 0) { // Save
+        const saved = await saveTab(tab.id);
+        if (!saved) return; // Save canceled → abort close
+      }
+    }
+  }
+  // All saved or discarded
+  ipcRenderer.send('app:can-close');
+});
+
+/* ========== WELCOME CONTENT ========== */
+const WELCOME = `# 欢迎使用 MarkFlow
 
 一个免费的 **Typora 风格** Markdown 编辑器，所见即所得。
 
@@ -438,6 +1136,16 @@ const WELCOME = `# 欢迎使用 MarkFlow ✨
 这个编辑器就像 Typora 一样——你看到的就是渲染后的文档，直接在上面编辑。点击任何位置开始输入，格式化会实时生效。
 
 按 \`Ctrl+/\` 切换到**源码模式**查看和编辑原始 Markdown。
+
+## 多标签页
+
+支持同时打开多个文件！像浏览器一样使用标签切换：
+
+- \`Ctrl+N\` 新建标签
+- \`Ctrl+W\` 关闭标签
+- \`Ctrl+Tab\` 切换下一个标签
+- \`Ctrl+Shift+Tab\` 切换上一个标签
+- 拖放 .md 文件自动在新标签中打开
 
 ## 代码高亮
 
@@ -459,11 +1167,11 @@ def quicksort(arr):
     return quicksort(left) + [pivot] + quicksort(right)
 \`\`\`
 
-> 💡 代码块右下角显示语言标签，**点击可以切换语言**
+> 代码块右下角显示语言标签，**点击可以切换语言**
 
 ## 图片
 
-支持插入图片：点击工具栏 📷 按钮、粘贴剪贴板图片、或拖放图片文件。
+支持插入图片：点击工具栏按钮、粘贴剪贴板图片、或拖放图片文件。
 
 ## 数学公式
 
@@ -506,13 +1214,16 @@ graph TD
 ## 任务列表
 
 - [x] WYSIWYG 编辑
+- [x] 多标签页支持
 - [x] 代码块语言选择
 - [x] KaTeX 数学公式
 - [x] Mermaid 图表
+- [x] 右键菜单
+- [x] 查找替换
 - [x] 图片插入 (工具栏/粘贴/拖放)
 - [x] 深色/浅色主题
 - [x] Ctrl+Z 撤销 / Ctrl+Y 重做
-- [ ] 更多功能持续开发...
+- [x] 最近文件列表
 
 ## 表格
 
@@ -524,8 +1235,9 @@ graph TD
 | 图片 | Ctrl+Shift+I | 插入图片 |
 | 源码 | Ctrl+/ | 切换模式 |
 | 保存 | Ctrl+S | 保存文件 |
-| 撤销 | Ctrl+Z | 撤销操作 |
-| 重做 | Ctrl+Y | 重做操作 |
+| 新标签 | Ctrl+N | 新建标签 |
+| 关闭标签 | Ctrl+W | 关闭标签 |
+| 切换标签 | Ctrl+Tab | 下一个标签 |
 
 ## 键盘快捷键
 
@@ -534,11 +1246,13 @@ graph TD
 - \`Ctrl+Shift+K\` 代码块 · \`Ctrl+Shift+I\` 插入图片
 - \`Ctrl+/\` 源码模式 · \`Ctrl+\\\\\` 大纲
 - \`Ctrl+Z\` 撤销 · \`Ctrl+Y\` 重做
+- \`Ctrl+N\` 新标签 · \`Ctrl+W\` 关闭标签 · \`Ctrl+Tab\` 切换
 - 输入 \`\`\`\` 后回车自动创建代码块
+- 右键编辑区域打开上下文菜单
 
 ---
 
-*MarkFlow v5 — 免费的 Typora 替代品* 🎉
+*MarkFlow v6 — 免费的 Typora 替代品*
 `;
 
 /* ========== INIT ========== */
@@ -546,9 +1260,14 @@ graph TD
 const markedModule = require('marked');
 markedModule.setOptions({ gfm: true, breaks: true, smartLists: true });
 
-editor.loadMarkdown(WELCOME);
+// Create initial welcome tab
+createTab('', WELCOME, true);
+
 // Focus first editable block
 setTimeout(() => {
   const first = editor.blocks.find(b => ['paragraph', 'heading'].includes(b.type));
   if (first) editor._focusBlock(first, 'start');
 }, 100);
+
+// Load recent files in sidebar
+loadRecentFiles();

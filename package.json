@@ -1,6 +1,6 @@
 {
   "name": "markflow",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "MarkFlow — 免费 Typora 风格 Markdown 编辑器",
   "main": "src/main.js",
   "author": "MarkFlow",
@@ -16,7 +16,9 @@
     "productName": "MarkFlow",
     "copyright": "Copyright © 2026 MarkFlow",
     "files": ["src/**/*", "node_modules/**/*"],
+    "icon": "build/icon.png",
     "win": {
+      "icon": "build/icon.ico",
       "target": [{"target":"nsis","arch":["x64"]}],
       "fileAssociations": [
         {"ext":"md","name":"Markdown","description":"Markdown Document","role":"Editor"},
@@ -32,12 +34,14 @@
       "shortcutName": "MarkFlow"
     },
     "linux": {
+      "icon": "build/icon.png",
       "target":["AppImage","deb"],
       "category":"Office",
       "mimeTypes":["text/markdown","text/x-markdown"],
       "fileAssociations":[{"ext":"md","mimeType":"text/markdown"}]
     },
     "mac": {
+      "icon": "build/icon.png",
       "target":["dmg"],
       "category":"public.app-category.productivity",
       "fileAssociations":[{"ext":"md","role":"Editor"}]

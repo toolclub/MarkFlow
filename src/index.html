@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <link rel="icon" type="image/png" href="../build/icon.png">
   <title>MarkFlow</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
   <link rel="stylesheet" href="styles.css">
@@ -43,18 +44,51 @@
     </div>
   </div>
 
+  <!-- Tab bar -->
+  <div id="tabbar">
+    <div id="tablist"></div>
+    <button id="tabNew" title="新建标签 (Ctrl+N)">+</button>
+  </div>
+
+  <!-- Typora-style floating find/replace panel -->
   <div id="findbar">
-    <input id="fi" placeholder="查找..."><span id="fc">0</span>
-    <button class="fb" id="fpv">▲</button><button class="fb" id="fnx">▼</button>
-    <input id="ri" placeholder="替换...">
-    <button class="fb" id="r1">替换</button><button class="fb" id="rall">全部</button>
-    <button class="fb" id="fclose">✕</button>
+    <div class="find-row">
+      <div class="find-input-wrap">
+        <input id="fi" placeholder="查找..." spellcheck="false">
+        <span id="fc" class="find-count"></span>
+      </div>
+      <button class="find-btn" id="fpv" title="上一个 (Shift+Enter)">
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 2L1 7h10z" fill="currentColor"/></svg>
+      </button>
+      <button class="find-btn" id="fnx" title="下一个 (Enter)">
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 10L1 5h10z" fill="currentColor"/></svg>
+      </button>
+      <button class="find-btn find-toggle-replace" id="ftoggle" title="替换">
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 4h8M6 4l3-3M6 4l3 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+      </button>
+      <button class="find-btn find-close" id="fclose" title="关闭 (Esc)">
+        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="replace-row" id="replaceRow" style="display:none">
+      <div class="find-input-wrap">
+        <input id="ri" placeholder="替换..." spellcheck="false">
+      </div>
+      <button class="find-btn" id="r1" title="替换">替换</button>
+      <button class="find-btn" id="rall" title="全部替换">全部</button>
+    </div>
   </div>
 
   <div id="main">
     <aside id="sidebar">
-      <div class="sbh">大纲</div>
-      <div id="outlineList"></div>
+      <div class="sb-section">
+        <div class="sbh">大纲</div>
+        <div id="outlineList"></div>
+      </div>
+      <div class="sb-section" id="recentSection">
+        <div class="sbh">最近文件</div>
+        <div id="recentList"></div>
+      </div>
       <div class="sbf" id="wordcount">0 字</div>
     </aside>
 
@@ -73,6 +107,9 @@
     <input id="langInput" placeholder="搜索语言...">
     <div id="langList"></div>
   </div>
+
+  <!-- Context menu -->
+  <div id="contextMenu" class="ctx-menu"></div>
 
   <div id="statusbar">
     <span id="stFile">未命名</span>

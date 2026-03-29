@@ -47,6 +47,19 @@ class Editor {
     this.container.addEventListener('input', () => this._onInput());
     this.container.addEventListener('paste', e => this._onPaste(e));
 
+    // Fix: forward vertical scroll from code blocks (overflow-x:auto captures wheel)
+    this.container.addEventListener('wheel', e => {
+      const pre = e.target.closest && e.target.closest('pre');
+      if (pre && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        // Vertical scroll intent — let the editor pane handle it
+        const scrollPane = this.container.parentElement;
+        if (scrollPane) {
+          scrollPane.scrollTop += e.deltaY;
+          e.preventDefault();
+        }
+      }
+    }, { passive: false });
+
     // Click on container below content → focus last block or create paragraph
     this.container.addEventListener('click', e => {
       if (e.target === this.container) {
@@ -1472,7 +1485,8 @@ class Editor {
         try {
           const ext = item.type.split('/')[1] === 'jpeg' ? 'jpg' : (item.type.split('/')[1] || 'png');
           const filename = `image-${Date.now()}.${ext}`;
-          const savedPath = await ipcRenderer.invoke('save:image', { data: base64, filename });
+          const baseDir = pathMod.dirname(this.currentFilePath);
+          const savedPath = await ipcRenderer.invoke('save:image', { data: base64, filename, baseDir });
           if (savedPath) {
             this._insertImage(savedPath, '');
             return;
@@ -1585,6 +1599,7 @@ class Editor {
         }
         break;
       }
+      case 'code':
       case 'codeblock': {
         this._saveSnapshot();
         const active = this._getActiveBlock();
